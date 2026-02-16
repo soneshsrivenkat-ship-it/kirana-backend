@@ -10,6 +10,16 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * RateLimiterService
+ *
+ * Responsible for:
+ *  - Resolving per-user buckets
+ *  - Applying role-based rate limit configuration
+ *  - Creating buckets dynamically when not present
+ *
+ * Uses in-memory ConcurrentHashMap for bucket storage.
+ */
 @Service
 public class RateLimiterService {
 
@@ -18,6 +28,10 @@ public class RateLimiterService {
 
     private final RateLimitProperties properties;
 
+    /**
+     * In-memory bucket cache.
+     * Key format: apiName:userKey
+     */
     private final Map<String, Bucket> bucketCache =
             new ConcurrentHashMap<>();
 
@@ -25,6 +39,14 @@ public class RateLimiterService {
         this.properties = properties;
     }
 
+    /**
+     * Resolves or creates a Bucket for a specific API and user.
+     *
+     * @param apiName API identifier (transaction, product, etc.)
+     * @param userKey userId or IP address
+     * @param role    user role (ADMIN, STAFF, USER)
+     * @return Bucket configured with appropriate limits
+     */
     public Bucket resolveBucket(String apiName,
                                 String userKey,
                                 String role) {
@@ -33,15 +55,26 @@ public class RateLimiterService {
 
         return bucketCache.computeIfAbsent(bucketKey, key -> {
 
-            RateLimitProperties.ApiLimit config =
-                    properties.getLimits()
-                            .get(apiName)
-                            .getOrDefault(role,
-                                    properties.getLimits()
-                                            .get(apiName)
-                                            .get("USER"));
+            log.debug("Creating new rate limit bucket for key={}", bucketKey);
 
-            log.info("Creating bucket for {}", bucketKey);
+            Map<String, Map<String, RateLimitProperties.ApiLimit>> limits =
+                    properties.getLimits();
+
+            if (limits == null || !limits.containsKey(apiName)) {
+                log.warn("No rate limit configuration found for api={}", apiName);
+                throw new RuntimeException("Rate limit config missing for API: " + apiName);
+            }
+
+            RateLimitProperties.ApiLimit config =
+                    limits.get(apiName)
+                            .getOrDefault(role,
+                                    limits.get(apiName).get("USER"));
+
+            log.info("Applying rate limit: api={}, role={}, capacity={}, duration={}s",
+                    apiName,
+                    role,
+                    config.getCapacity(),
+                    config.getDuration());
 
             Bandwidth limit = Bandwidth.classic(
                     config.getCapacity(),

@@ -14,7 +14,7 @@ import java.util.List;
 public interface TransactionRepository
         extends JpaRepository<Transaction, String> {
 
-    List<Transaction> findByTransactionGroupId(String transactionGroupId);
+
     /**
      * Return the transaction based on the currency type.
      * @param currencyType parameter used to find the transactions.
@@ -37,4 +37,6 @@ public interface TransactionRepository
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to
     );
+
+    List<Transaction> findByParentTransactionId(String parentTransactionId);
 }
