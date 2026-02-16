@@ -1,8 +1,17 @@
 package com.example.demo.reporting.controller;
+
 import com.example.demo.reporting.document.FinancialReport;
 import com.example.demo.reporting.service.FinancialReportService;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * REST controller for fetching financial reports.
+ *
+ * Provides endpoints to retrieve:
+ *  - Weekly reports
+ *  - Monthly reports
+ *  - Yearly reports
+ */
 @RestController
 @RequestMapping("/reports")
 public class ReportingController {
@@ -13,6 +22,9 @@ public class ReportingController {
         this.service = service;
     }
 
+    /**
+     * Fetch weekly financial report.
+     */
     @GetMapping("/weekly")
     public FinancialReport getWeeklyReport(
             @RequestParam String userId,
@@ -26,6 +38,9 @@ public class ReportingController {
                 .orElseThrow();
     }
 
+    /**
+     * Fetch monthly financial report.
+     */
     @GetMapping("/monthly")
     public FinancialReport getMonthlyReport(
             @RequestParam String userId,
@@ -39,6 +54,9 @@ public class ReportingController {
                 .orElseThrow();
     }
 
+    /**
+     * Fetch yearly financial report.
+     */
     @GetMapping("/yearly")
     public FinancialReport getYearlyReport(
             @RequestParam String userId,

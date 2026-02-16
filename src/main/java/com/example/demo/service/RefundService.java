@@ -13,15 +13,14 @@ import com.example.demo.entity.TransactionType;
 import com.example.demo.kafka.producer.KafkaProducerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -32,41 +31,58 @@ public class RefundService {
     private final ProductDAO productDAO;
     private final KafkaProducerService kafkaProducerService;
 
-    /**
-     * Processes a refund for a given transaction.
-     * <p>
-     * This method performs the following operations:
-     * 1. Fetches the original transaction using the provided transaction ID.
-     * 2. Retrieves all associated transaction items.
-     * 3. Validates refundable items.
-     * 4. Restores product stock quantities.
-     * 5. Creates a new DEBIT transaction representing the refund.
-     * 6. Saves corresponding refund transaction items.
-     * 7. Updates the total refund amount.
-     * <p>
-     * The refund is executed as a transactional operation,
-     * meaning all operations will roll back if any step fails.
-     *
-     * @param request contains the transaction ID to be refunded
-     * @throws RuntimeException if transaction is not found
-     * @throws RuntimeException if no items exist for the transaction
-     */
     @Transactional
-    @CacheEvict(value = {"transactions", "products"}, allEntries = true)
+    @CacheEvict(value = {"transactions"}, allEntries = true)
     public TransactionResponse refund(RefundRequest request) {
 
-        String userId = SecurityContextHolder
-                .getContext()
-                .getAuthentication()
-                .getName();
+        // ==========================
+        // 1️⃣ Validate Authentication
+        // ==========================
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
 
+        if (auth == null || !auth.isAuthenticated()) {
+            throw new RuntimeException("User not authenticated");
+        }
 
+        String userId = auth.getName();
+
+        // ==========================
+        // 2️⃣ Validate Request
+        // ==========================
+        if (request.getProductIds() == null || request.getProductIds().isEmpty()) {
+            throw new RuntimeException("Product list cannot be empty");
+        }
+
+        // ==========================
+        // 3️⃣ Fetch Original Transaction
+        // ==========================
         Transaction originalTxn = transactionDAO
                 .findById(request.getTransactionId())
-                .orElseThrow(() ->
-                        new RuntimeException("Transaction not found"));
+                .orElseThrow(() -> new RuntimeException("Transaction not found"));
 
+        if (originalTxn.getTransactionType() != TransactionType.CREDIT) {
+            throw new RuntimeException("Refund allowed only for CREDIT transactions");
+        }
 
+        // ==========================
+        // 4️⃣ Prevent Double Refund
+        // ==========================
+        List<Transaction> existingRefunds =
+                transactionDAO.findByParentTransactionId(originalTxn.getId());
+
+        Set<String> alreadyRefundedProducts = new HashSet<>();
+
+        for (Transaction refundTxn : existingRefunds) {
+            List<TransactionItem> refundedItems =
+                    itemDAO.findByTransactionId(refundTxn.getId());
+
+            refundedItems.forEach(i ->
+                    alreadyRefundedProducts.add(i.getProductId()));
+        }
+
+        // ==========================
+        // 5️⃣ Get Original Items
+        // ==========================
         List<TransactionItem> originalItems =
                 itemDAO.findByTransactionId(originalTxn.getId());
 
@@ -74,56 +90,73 @@ public class RefundService {
             throw new RuntimeException("No items found for transaction");
         }
 
+        Map<String, TransactionItem> itemMap =
+                originalItems.stream()
+                        .collect(Collectors.toMap(
+                                TransactionItem::getProductId,
+                                i -> i
+                        ));
 
+        // ==========================
+        // 6️⃣ Create Refund Transaction
+        // ==========================
         Transaction refundTxn = new Transaction();
         refundTxn.setUserId(userId);
         refundTxn.setTransactionType(TransactionType.DEBIT);
         refundTxn.setCurrencyType(originalTxn.getCurrencyType());
+        refundTxn.setParentTransactionId(originalTxn.getId());
         refundTxn.setTotalAmount(BigDecimal.ZERO);
-
 
         refundTxn = transactionDAO.save(refundTxn);
 
         BigDecimal totalRefund = BigDecimal.ZERO;
         List<TransactionItemResponse> refundedItems = new ArrayList<>();
 
-        for (TransactionItem item : originalItems) {
+        // ==========================
+        // 7️⃣ Process Each Product
+        // ==========================
+        for (String productId : request.getProductIds()) {
 
-            // Refund only selected products
-            if (!request.getProductIds().contains(item.getProductId())) {
-                continue;
-            }
-
-            // Check refundable
-            if (!Boolean.TRUE.equals(item.getRefundable())) {
+            if (!itemMap.containsKey(productId)) {
                 throw new RuntimeException(
-                        "Product not refundable: " + item.getProductName());
+                        "Product does not belong to original transaction: " + productId);
             }
 
+            if (alreadyRefundedProducts.contains(productId)) {
+                throw new RuntimeException(
+                        "Product already refunded: " + productId);
+            }
 
-            Product product = productDAO.findById(item.getProductId())
-                    .orElseThrow(() ->
-                            new RuntimeException("Product not found"));
+            TransactionItem originalItem = itemMap.get(productId);
 
+            if (!Boolean.TRUE.equals(originalItem.getRefundable())) {
+                throw new RuntimeException(
+                        "Product not refundable: " + originalItem.getProductName());
+            }
+
+            Product product = productDAO.findById(productId)
+                    .orElseThrow(() -> new RuntimeException("Product not found"));
+
+            // Restore stock
             product.setStockQuantity(
-                    product.getStockQuantity() + item.getPurchaseQuantity());
+                    product.getStockQuantity() + originalItem.getPurchaseQuantity());
 
             productDAO.save(product);
 
-
+            // Create refund item
             TransactionItem refundItem = new TransactionItem();
             refundItem.setId(UUID.randomUUID().toString());
             refundItem.setTransactionId(refundTxn.getId());
-            refundItem.setProductId(item.getProductId());
-            refundItem.setProductName(item.getProductName());
-            refundItem.setPurchaseQuantity(item.getPurchaseQuantity());
-            refundItem.setPriceAtPurchase(item.getPriceAtPurchase());
+            refundItem.setProductId(originalItem.getProductId());
+            refundItem.setProductName(originalItem.getProductName());
+            refundItem.setPurchaseQuantity(originalItem.getPurchaseQuantity());
+            refundItem.setPriceAtPurchase(originalItem.getPriceAtPurchase());
             refundItem.setRefundable(true);
-            refundItem.setItemTotal(item.getItemTotal());
+            refundItem.setItemTotal(originalItem.getItemTotal());
 
             itemDAO.save(refundItem);
 
-            totalRefund = totalRefund.add(item.getItemTotal());
+            totalRefund = totalRefund.add(originalItem.getItemTotal());
 
             refundedItems.add(
                     new TransactionItemResponse(
@@ -139,14 +172,11 @@ public class RefundService {
             );
         }
 
-        if (refundedItems.isEmpty()) {
-            throw new RuntimeException("No valid products selected for refund");
-        }
-
-
+        // ==========================
+        // 8️⃣ Finalize Refund
+        // ==========================
         refundTxn.setTotalAmount(totalRefund);
         transactionDAO.save(refundTxn);
-        transactionDAO.flush();
 
         kafkaProducerService.sendTransactionEvent(refundTxn);
 
@@ -156,6 +186,7 @@ public class RefundService {
                 refundTxn.getTotalAmount(),
                 refundTxn.getTransactionType(),
                 refundTxn.getCurrencyType(),
+                refundTxn.getParentTransactionId(),
                 refundTxn.getDate(),
                 refundedItems
         );

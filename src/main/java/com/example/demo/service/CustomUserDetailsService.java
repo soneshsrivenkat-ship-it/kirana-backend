@@ -3,38 +3,51 @@ package com.example.demo.security;
 import com.example.demo.entity.User;
 import com.example.demo.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.userdetails.*;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
 
+/**
+ * Custom UserDetailsService implementation.
+ *
+ * Responsible for loading user details from the database
+ * during authentication.
+ *
+ * Used internally by Spring Security.
+ */
 @Service
 @RequiredArgsConstructor
 public class CustomUserDetailsService implements UserDetailsService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(CustomUserDetailsService.class);
+
     private final UserRepository userRepository;
+
     /**
-     * Locates the user based on the provided username.
+     * Locates user by username.
      *
-     * This method is used by Spring Security during authentication.
-     * It retrieves the user details from the database and converts
-     * them into a {@link org.springframework.security.core.userdetails.UserDetails}
-     * object required by the security framework.
-     *
-     * If the user is not found, a {@link org.springframework.security.core.userdetails.UsernameNotFoundException}
-     * is thrown.
-     *
-     * @param username the username identifying the user whose data is required
-     * @return a fully populated UserDetails object (never null)
-     * @throws UsernameNotFoundException if the user could not be found
+     * @param username username provided during login
+     * @return UserDetails object required by Spring Security
+     * @throws UsernameNotFoundException if user not found
      */
     @Override
     public UserDetails loadUserByUsername(String username)
             throws UsernameNotFoundException {
 
+        log.debug("Authentication attempt for username: {}", username);
+
         User user = userRepository.findById(username)
-                .orElseThrow(() ->
-                        new UsernameNotFoundException("User not found"));
+                .orElseThrow(() -> {
+                    log.warn("Authentication failed. User not found: {}", username);
+                    return new UsernameNotFoundException("User not found");
+                });
+
+        log.info("User authenticated successfully: {} with role {}",
+                user.getUsername(), user.getRole());
 
         return new org.springframework.security.core.userdetails.User(
                 user.getUsername(),

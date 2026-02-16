@@ -7,10 +7,19 @@ import com.example.demo.reporting.document.FinancialReport;
 import com.example.demo.reporting.repo.FinancialReportRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 
+/**
+ * Service responsible for managing financial reports.
+ *
+ * Handles:
+ *  - Manual report processing
+ *  - Report lookup operations
+ *  - Monthly aggregation logic
+ */
 @Service
 @RequiredArgsConstructor
 public class FinancialReportService {
@@ -18,6 +27,12 @@ public class FinancialReportService {
     private final TransactionDAO transactionDAO;
     private final FinancialReportRepository reportRepository;
 
+    /**
+     * Processes a transaction and updates
+     * the corresponding monthly financial report.
+     *
+     * @param transactionId ID of the transaction to process
+     */
     public void processTransaction(String transactionId) {
 
         Transaction txn = transactionDAO.findById(transactionId)
@@ -60,11 +75,20 @@ public class FinancialReportService {
         reportRepository.save(report);
 
         System.out.println("Updated Mongo Financial Report");
-        //SLF4J   LOGBACK
     }
 
-    public Optional<FinancialReport> findByUserIdAndPeriodTypeAndPeriodAndCurrencyType(String userId, String weekly, String week, String currency) {
+    /**
+     * Fetch report by user, period type, period, and currency.
+     */
+    public Optional<FinancialReport>
+    findByUserIdAndPeriodTypeAndPeriodAndCurrencyType(
+            String userId,
+            String periodType,
+            String period,
+            String currency) {
 
-        return reportRepository.findByUserIdAndPeriodTypeAndPeriodAndCurrencyType(userId,weekly,week,currency);
+        return reportRepository
+                .findByUserIdAndPeriodTypeAndPeriodAndCurrencyType(
+                        userId, periodType, period, currency);
     }
 }
