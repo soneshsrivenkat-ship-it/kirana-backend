@@ -1,7 +1,8 @@
 package com.example.demo.service;
+import com.esotericsoftware.kryo.util.Null;
+import org.springframework.cache.annotation.CacheConfig;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
-
 import com.example.demo.dao.ProductDAO;
 import com.example.demo.dao.TransactionDAO;
 import com.example.demo.dao.TransactionItemDAO;
@@ -11,8 +12,6 @@ import com.example.demo.entity.Product;
 import com.example.demo.entity.Transaction;
 import com.example.demo.entity.TransactionItem;
 import com.example.demo.entity.TransactionType;
-import com.example.demo.exception.ProductNotFoundException;
-import com.example.demo.exception.InsufficientStockException;
 import com.example.demo.kafka.producer.KafkaProducerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -26,6 +25,7 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@CacheConfig(cacheNames = "transactions")
 public class TransactionService {
 
     private final ProductDAO productDAO;
@@ -33,7 +33,10 @@ public class TransactionService {
     private final TransactionItemDAO transactionItemDAO;
     private final KafkaProducerService kafkaProducerService;
 
+
+
     @Transactional
+    @CacheEvict(allEntries = true)
     public TransactionResponse createTransaction(TransactionRequest request) {
 
         String userId = SecurityContextHolder.getContext()
@@ -45,6 +48,7 @@ public class TransactionService {
         txn.setTransactionType(TransactionType.CREDIT);
         txn.setCurrencyType(request.getCurrencyType());
         txn.setTotalAmount(BigDecimal.ZERO);
+        txn.setParentTransactionId(null);
 
         txn = transactionDAO.save(txn);
 
@@ -83,19 +87,6 @@ public class TransactionService {
             item.setItemTotal(itemTotal);
 
             transactionItemDAO.save(item);
-
-            itemResponses.add(
-                    new TransactionItemResponse(
-                            item.getId(),
-                            transactionId,
-                            item.getProductId(),
-                            item.getProductName(),
-                            item.getPurchaseQuantity(),
-                            item.getPriceAtPurchase(),
-                            item.getRefundable(),
-                            item.getItemTotal()
-                    )
-            );
         }
 
         txn.setTotalAmount(totalAmount);
@@ -108,6 +99,7 @@ public class TransactionService {
     }
 
 
+    @Cacheable(key = "#id")
     public TransactionResponse getTransactionById(String id) {
 
         Transaction txn = transactionDAO.findById(id)
@@ -117,26 +109,38 @@ public class TransactionService {
     }
 
 
+    @Cacheable(key = "'ALL'")
     public List<TransactionResponse> getAllTransactions() {
+
         return transactionDAO.findAll()
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
     }
 
+
+    @Cacheable(key = "'CURRENCY_' + #currency")
     public List<TransactionResponse> getByCurrency(String currency) {
+
         return transactionDAO.findByCurrency(currency)
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
     }
 
-    public List<TransactionResponse> getByTime(LocalDateTime from, LocalDateTime to) {
+
+    @Cacheable(
+            key = "'TIME_' + #from.toString() + '_' + #to.toString()")
+    public List<TransactionResponse> getByTime(
+            LocalDateTime from,
+            LocalDateTime to) {
+
         return transactionDAO.findByTime(from, to)
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
     }
+
 
     private TransactionResponse mapToResponse(Transaction txn) {
 
@@ -146,6 +150,7 @@ public class TransactionService {
         List<TransactionItemResponse> itemResponses = new ArrayList<>();
 
         for (TransactionItem item : items) {
+
             itemResponses.add(
                     new TransactionItemResponse(
                             item.getId(),
@@ -166,6 +171,7 @@ public class TransactionService {
                 txn.getTotalAmount(),
                 txn.getTransactionType(),
                 txn.getCurrencyType(),
+                txn.getParentTransactionId(),
                 txn.getDate(),
                 itemResponses
         );

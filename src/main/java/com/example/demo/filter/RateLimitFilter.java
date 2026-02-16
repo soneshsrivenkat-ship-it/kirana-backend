@@ -16,6 +16,17 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
+/**
+ * Global rate limiting filter applied once per request.
+ *
+ * This filter:
+ *  - Identifies the API being accessed.
+ *  - Determines the user identity (authenticated user or IP address).
+ *  - Resolves the appropriate rate-limit bucket using {@link RateLimiterService}.
+ *  - Blocks requests that exceed configured limits.
+ *
+ * Uses Bucket4j for token-based rate limiting.
+ */
 @Component
 @RequiredArgsConstructor
 public class RateLimitFilter extends OncePerRequestFilter {
@@ -23,8 +34,19 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final Logger log =
             LoggerFactory.getLogger(RateLimitFilter.class);
 
+    /**
+     * Service responsible for resolving rate-limit buckets
+     * based on API name, user key, and role.
+     */
     private final RateLimiterService rateLimiterService;
 
+    /**
+     * Core filtering logic executed once per HTTP request.
+     *
+     * @param request  Incoming HTTP request
+     * @param response HTTP response
+     * @param filterChain Filter chain for forwarding request
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
@@ -34,6 +56,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         String apiName = extractApiName(path);
 
+        // If the endpoint is not rate-limited, continue normally
         if (apiName == null) {
             filterChain.doFilter(request, response);
             return;
@@ -45,6 +68,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String userKey;
         String role = "USER";
 
+        // Determine whether the request is authenticated
         if (auth != null
                 && auth.isAuthenticated()
                 && !(auth instanceof AnonymousAuthenticationToken)) {
@@ -57,19 +81,22 @@ public class RateLimitFilter extends OncePerRequestFilter {
                     .orElse("USER");
 
         } else {
-
+            // Fallback to client IP if unauthenticated
             userKey = request.getRemoteAddr();
             role = "USER";
         }
 
+        // Resolve rate limit bucket
         Bucket bucket =
                 rateLimiterService.resolveBucket(apiName, userKey, role);
 
+        // Attempt token consumption
         ConsumptionProbe probe =
                 bucket.tryConsumeAndReturnRemaining(1);
 
         if (probe.isConsumed()) {
 
+            // Add remaining token information in header
             response.addHeader("X-Rate-Limit-Remaining",
                     String.valueOf(probe.getRemainingTokens()));
 
@@ -77,6 +104,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
         } else {
 
+            // Calculate retry wait time
             long waitSeconds =
                     probe.getNanosToWaitForRefill() / 1_000_000_000;
 
@@ -98,6 +126,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
+    /**
+     * Extracts a logical API name from the request path.
+     * This is used to map requests to configured rate-limit rules.
+     *
+     * @param path Request URI
+     * @return API name or null if no rate limiting is required
+     */
     private String extractApiName(String path) {
 
         if (path.startsWith("/transactions")) return "transaction";

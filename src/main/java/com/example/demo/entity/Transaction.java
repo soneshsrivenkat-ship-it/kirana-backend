@@ -18,9 +18,11 @@ public class Transaction {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    private String id;    // Unique transaction ID
+    private String id;
 
-    private String transactionGroupId;
+
+    @Column(name = "parent_transaction_id")
+    private String parentTransactionId;
 
     private String userId;
 
@@ -34,4 +36,3 @@ public class Transaction {
     @CreationTimestamp
     private LocalDateTime date;
 }
-
